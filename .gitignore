@@ -1,3 +1,4 @@
 .DS_Store
 .venv
 const.py
+__pycache__
