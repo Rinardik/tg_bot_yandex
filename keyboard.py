@@ -10,9 +10,15 @@ catalog_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Обувь", callback_data="cat_обувь")]
 ])
 
-admin_panel_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="Добавить товар", callback_data="add_product")],
-    [InlineKeyboardButton(text="Удалить товар", callback_data="delete_product")],
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+mened = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="➕ Добавить товар", callback_data="add_product")],
+    [InlineKeyboardButton(text="🗂 Добавить категорию", callback_data="add_category")],
+    [InlineKeyboardButton(text="🧩 Добавить подкатегорию", callback_data="add_subcategory")],
+    [InlineKeyboardButton(text="❌ Удалить товар", callback_data="delete_product")],
+    [InlineKeyboardButton(text="✏️ Редактировать товар", callback_data="edit_product")],
+    [InlineKeyboardButton(text="📦 Список товаров", callback_data="list_products")],
 ])
 
 zam_parol = ReplyKeyboardMarkup(
@@ -43,4 +49,15 @@ def get_login_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Вход", callback_data="entr")],
         [InlineKeyboardButton(text="Забыли пароль?", callback_data="forgot_password")]
+    ])
+
+
+def edit_product_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить название", callback_data=f"edit_product_name_{product_id}")],
+        [InlineKeyboardButton(text="📝 Изменить описание", callback_data=f"edit_product_description_{product_id}")],
+        [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"edit_product_price_{product_id}")],
+        [InlineKeyboardButton(text="🗂 Изменить категорию", callback_data=f"edit_product_category_{product_id}")],
+        [InlineKeyboardButton(text="🧩 Изменить подкатегорию", callback_data=f"edit_product_subcategory_{product_id}")],
+        [InlineKeyboardButton(text="📷 Изменить фото", callback_data=f"edit_product_photo_{product_id}")]
     ])

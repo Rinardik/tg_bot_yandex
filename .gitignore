@@ -2,3 +2,5 @@
 .venv
 const.py
 __pycache__
+*.db
+.env

@@ -3,6 +3,7 @@ import time
 from datetime import timedelta
 import re
 
+
 def is_password_strong(password: str, name: str = "", phone: str = "") -> tuple[bool, str]:
     if len(password) < 6:
         return False, "Пароль слишком короткий. Минимум 6 символов."
@@ -21,6 +22,7 @@ def is_password_strong(password: str, name: str = "", phone: str = "") -> tuple[
         if len(digits) >= 4 and any(part in password for part in [digits[-4:], digits[:4]]):
             return False, "Пароль не должен содержать часть вашего номера телефона."
     return True, "Пароль соответствует требованиям безопасности."
+
 
 async def format_phone(phone: str) -> str:
     digits = ''.join(filter(str.isdigit, phone))
@@ -66,3 +68,5 @@ async def was_inactive_for_24_hours(last_active_time: int) -> bool:
     now = time.time()
     inactive_period = now - last_active_time
     return inactive_period > timedelta(days=1).total_seconds()
+
+
