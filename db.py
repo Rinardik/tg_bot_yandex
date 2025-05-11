@@ -7,14 +7,13 @@ def init_users():
     conn = sqlite3.connect("users.db")
     cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                name TEXT,
-                phone INTEGER,
-                password TEXT,
-                basket TEXT,
-                is_logged_in INTEGER DEFAULT 0,
-                last_active INTEGER DEFAULT 0,
-                verification_code TEXT
+            user_id INTEGER PRIMARY KEY,
+            name TEXT,
+            phone TEXT,
+            password TEXT,
+            basket TEXT,
+            is_logged_in INTEGER DEFAULT 0,
+            last_active INTEGER DEFAULT 0
 )""")
     conn.commit()
     return conn, cur
@@ -51,6 +50,14 @@ def update_or_create_user(user_id, name, phone, password=None, is_logged_in=1):
         conn.commit()
     finally:
         conn.close()
+
+
+def check_phon(phone):
+    conn = sqlite3.connect("users.db")
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM users WHERE phone = ?", (phone,))
+    result = cur.fetchone()
+    return result
 
 
 def get_user_basket(user_id):

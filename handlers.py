@@ -1,13 +1,13 @@
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Contact
 from aiogram.filters import CommandStart, Command, StateFilter
 from other_funch import was_inactive_for_24_hours
 import db
 import keyboard as kb
-from other_funch import user_exists, is_correct_mobile_phone_number_ru, generate_code
-import random
+from other_funch import user_exists, is_correct_mobile_phone_number_ru, format_phone, is_password_strong
+
 
 router = Router()
 
@@ -31,18 +31,11 @@ class RecoveryForm(StatesGroup):
     new_password = State()
     confirm_new_password = State()
 
-
 # РЕГИСТРАЦИЯ
 
-@router.callback_query(F.data == "start_registration")
-async def process_registration_button(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    exists = await user_exists(user_id)
-    if exists:
-        await callback.message.answer("Вы уже зарегистрированы.", reply_markup=kb.get_logout_kb)
-        await callback.answer()
-        return
-    await callback.message.answer("Введите ваше имя:", reply_markup=kb.get_cancel_kb())
+@router.callback_query(F.data == "registration")
+async def process_registration(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите ваше имя:")
     await state.set_state(RegistrationForm.name)
     await callback.answer()
 
@@ -50,28 +43,45 @@ async def process_registration_button(callback: CallbackQuery, state: FSMContext
 @router.message(StateFilter(RegistrationForm.name), F.text)
 async def process_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Введите номер телефона:", reply_markup=kb.get_cancel_kb())
+    await message.answer("Нажмите на кнопку ниже, чтобы отправить ваш номер телефона:", reply_markup=kb.zam_parol)
     await state.set_state(RegistrationForm.phone)
 
-
-@router.message(StateFilter(RegistrationForm.phone), F.text)
+@router.message(StateFilter(RegistrationForm.phone), F.contact)
 async def process_phone(message: Message, state: FSMContext):
-    phone = message.text.strip()
+    contact: Contact = message.contact
+    phone = await format_phone(contact.phone_number)
     correct, answer = await is_correct_mobile_phone_number_ru(phone)
     if not correct:
         await message.answer(answer)
         return
+    conn, cur = db.init_users()
+    try:
+        cur.execute("SELECT 1 FROM users WHERE phone = ?", (phone,))
+        user_exists = cur.fetchone() is not None
+    finally:
+        conn.close()
+    if user_exists:
+        await message.answer(
+            "❌ Пользователь с этим телефоном уже зарегистрирован.\n"
+            "Если вы забыли пароль — нажмите на кнопку ниже.",
+            reply_markup=kb.zam_parol
+        )
+        await state.clear()
+        return
     await state.update_data(phone=phone)
-    await message.answer("Введите пароль:", reply_markup=kb.get_cancel_kb())
+    await message.answer("Придумайте пароль:", reply_markup=kb.get_cancel_kb())
     await state.set_state(RegistrationForm.password)
 
-
+    
 @router.message(StateFilter(RegistrationForm.password), F.text)
 async def process_password(message: Message, state: FSMContext):
     password = message.text.strip()
-
-    if len(password) < 6:
-        await message.answer("Пароль слишком короткий. Минимум 6 символов.")
+    data = await state.get_data()
+    name = data.get("name")
+    phone = data.get("phone")
+    is_strong, msg = is_password_strong(password, name, phone)
+    if not is_strong:
+        await message.answer(msg)
         return
     await state.update_data(password=password)
     await message.answer("Повторите пароль:", reply_markup=kb.get_cancel_kb())
@@ -95,27 +105,22 @@ async def process_password_confirm(message: Message, state: FSMContext):
     await message.answer("✅ Вы успешно зарегистрированы!", reply_markup=kb.start_kb)
     await state.clear()
 
-
 # ВХОД
 
 @router.callback_query(F.data == "entr")
 async def process_login(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите ваш телефон:")
+    await callback.message.answer("Нажмите на кнопку ниже, чтобы отправить ваш номер телефона:", reply_markup=kb.zam_parol)
     await state.set_state(LoginStates.phone)
     await callback.answer()
 
 
-@router.message(StateFilter(LoginStates.phone), F.text)
+@router.message(StateFilter(LoginStates.phone), F.contact)
 async def login_enter_phone(message: Message, state: FSMContext):
-    phone = message.text.strip()
-    correct, answer = await is_correct_mobile_phone_number_ru(phone)
-    if not correct:
-        await message.answer(answer)
-        return
+    contact: Contact = message.contact
+    phone = await format_phone(contact.phone_number.strip())
     conn, cur = db.init_users()
     try:
-        cur.execute("SELECT 1 FROM users WHERE phone = ?", (phone,))
-        result = cur.fetchone()
+        result = db.check_phon(phone)
     finally:
         conn.close()
     if not result:
@@ -128,103 +133,27 @@ async def login_enter_phone(message: Message, state: FSMContext):
 
 @router.message(StateFilter(LoginStates.password), F.text)
 async def login_enter_password(message: Message, state: FSMContext):
-    password = message.text.strip()
     data = await state.get_data()
     phone = data["phone"]
+    password = message.text.strip()
     conn, cur = db.init_users()
     try:
-        cur.execute("SELECT user_id, password FROM users WHERE phone = ?", (phone,))
+        cur.execute("SELECT password FROM users WHERE phone = ?", (phone,))
         result = cur.fetchone()
-        if not result:
-            await message.answer("❌ Пользователь с таким телефоном не найден.")
-            await state.clear()
-            return
-        stored_password = result[1]
-        if password == stored_password:
-            await message.answer("✅ Вы успешно вошли в аккаунт!")
-            cur.execute("UPDATE users SET is_logged_in = 1 WHERE phone = ?", (phone,))
+    finally:
+        conn.close()
+    if result and result[0] == password:
+        conn, cur = db.init_users()
+        try:
+            cur.execute("UPDATE users SET is_logged_in = 1, last_active = strftime('%s','now') WHERE phone = ?",
+                        (phone,))
             conn.commit()
-            await state.clear()
-        else:
-            await message.answer("❌ Неверный пароль. Попробуйте снова:")
-    finally:
-        conn.close()
-
-
-@router.callback_query(F.data == "forgot_password")
-async def recovery_enter_phone(message: Message, state: FSMContext):
-    await message.answer("Введите ваш телефон:")
-    await state.set_state(RecoveryForm.phone)
-
-@router.callback_query(StateFilter(RecoveryForm.phone))
-async def recovery_enter_phone(callback: CallbackQuery, state: FSMContext):
-    phone = callback.message.text.strip()
-    correct, answer = await is_correct_mobile_phone_number_ru(phone)
-    if not correct:
-        await callback.answer(answer)
-        return
-    code = str(random.randint(100000, 999999))
-    await state.update_data(phone=phone, recovery_code=code)
-    conn, cur = db.init_users()
-    try:
-        cur.execute("UPDATE users SET verification_code = ? WHERE phone = ?", (code, phone))
-        conn.commit()
-        if cur.rowcount == 0:
-            await callback.answer("Пользователь с таким телефоном не найден.")
-            await state.clear()
-            return
-    finally:
-        conn.close()
-    await callback.answer("Мы отправили код подтверждения вам в Telegram. Введите его:")
-    await state.set_state(RecoveryForm.code)
-
-
-@router.message(StateFilter(RecoveryForm.code), F.text)
-async def recovery_enter_code(message: Message, state: FSMContext):
-    entered_code = message.text.strip()
-    conn, cur = db.init_users()
-    data = await state.get_data()
-    phone = data["phone"]
-    cur.execute("SELECT verification_code FROM users WHERE phone = ?", (phone,))
-    result = cur.fetchone()
-    stored_code = result[0] if result else None
-    conn.close()
-    if not stored_code or stored_code != entered_code:
-        await message.answer("❌ Неверный код. Попробуйте снова:")
-        return
-    await message.answer("Введите новый пароль:")
-    await state.set_state(RecoveryForm.new_password)
-
-
-@router.message(StateFilter(RecoveryForm.new_password), F.text)
-async def recovery_set_password(message: Message, state: FSMContext):
-    password = message.text.strip()
-    if len(password) < 6:
-        await message.answer("Пароль слишком короткий. Минимум 6 символов.")
-        return
-
-    await state.update_data(new_password=password)
-    await message.answer("Повторите пароль:")
-    await state.set_state(RecoveryForm.confirm_new_password)
-
-
-@router.message(StateFilter(RecoveryForm.confirm_new_password), F.text)
-async def recovery_confirm_password(message: Message, state: FSMContext):
-    data = await state.get_data()
-    new_password = data["new_password"]
-    confirm_password = message.text.strip()
-    if new_password != confirm_password:
-        await message.answer("Пароли не совпадают. Попробуйте снова:")
-        return
-    phone = data["phone"]
-    conn, cur = db.init_users()
-    try:
-        cur.execute("UPDATE users SET password = ?, verification_code = NULL WHERE phone = ?", (new_password, phone))
-        conn.commit()
-        await message.answer("✅ Пароль успешно изменён!")
+        finally:
+            conn.close()
+        await message.answer("✅ Вы успешно вошли в аккаунт!", reply_markup=kb.start_kb)
         await state.clear()
-    finally:
-        conn.close()
+    else:
+        await message.answer("❌ Неверный пароль. Попробуйте снова.")
 
 # /START
 
@@ -256,66 +185,41 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data == "forgot_password")
 async def start_recovery(callback: CallbackQuery, state: FSMContext):
-    "Начинаем восстановление пароля"
-    await callback.message.answer("Введите ваш телефон:")
+    await callback.message.answer("Нажмите на кнопку ниже, чтобы отправить ваш номер телефона:", reply_markup=kb.zam_parol)
     await state.set_state(RecoveryForm.phone)
     await callback.answer()
 
 
-@router.message(StateFilter(RecoveryForm.phone), F.text)
+@router.message(StateFilter(RecoveryForm.phone), F.contact)
 async def recovery_enter_phone(message: Message, state: FSMContext):
-    "Получаем телефон и отправляем код подтверждения"
-    phone = message.text.strip()
+    contact: Contact = message.contact
+    phone = await format_phone(contact.phone_number.strip())
     correct, answer = await is_correct_mobile_phone_number_ru(phone)
     if not correct:
         await message.answer(answer)
         return
-    code = str(random.randint(100000, 999999))
-    await state.update_data(phone=phone, recovery_code=code)
     conn, cur = db.init_users()
-    try:
-        cur.execute("UPDATE users SET verification_code = ? WHERE phone = ?", (code, phone))
-        conn.commit()
-        if cur.rowcount == 0:
-            await message.answer("Пользователь с таким телефоном не найден.")
-            await state.clear()
-            return
-    finally:
-        conn.close()
-    try:
-        bot = message.bot
-        await bot.send_message(chat_id=message.from_user.id, text=f"Ваш код подтверждения: {code}")
-    except Exception as e:
-        await message.answer("Не удалось отправить код в ЛС. Убедитесь, что вы запустили бота в личке.")
-        return
-    await message.answer("Мы отправили код вам в Telegram. Введите его:")
-    await state.set_state(RecoveryForm.code)
-
-
-@router.message(StateFilter(RecoveryForm.code), F.text)
-async def recovery_enter_code(message: Message, state: FSMContext):
-    "Проверяем код подтверждения"
-    entered_code = message.text.strip()
-    data = await state.get_data()
-    phone = data["phone"]
-    conn, cur = db.init_users()
-    cur.execute("SELECT verification_code FROM users WHERE phone = ?", (phone,))
-    result = cur.fetchone()
-    stored_code = result[0] if result else None
+    cur.execute("SELECT * FROM users WHERE phone = ?", (phone,))
+    user = cur.fetchone()
     conn.close()
-    if not stored_code or stored_code != entered_code:
-        await message.answer("❌ Неверный код. Попробуйте снова.")
+    if not user:
+        await message.answer("Пользователь с таким телефоном не найден.")
+        await state.clear()
         return
+    await state.update_data(phone=phone)
     await message.answer("Введите новый пароль:")
     await state.set_state(RecoveryForm.new_password)
 
 
 @router.message(StateFilter(RecoveryForm.new_password), F.text)
 async def recovery_set_password(message: Message, state: FSMContext):
-    "Устанавливаем новый пароль"
     password = message.text.strip()
-    if len(password) < 6:
-        await message.answer("Пароль слишком короткий. Минимум 6 символов.")
+    data = await state.get_data()
+    name = data.get("name")
+    phone = data.get("phone")
+    is_strong, msg = is_password_strong(password, name, phone)
+    if not is_strong:
+        await message.answer(msg)
         return
     await state.update_data(new_password=password)
     await message.answer("Повторите пароль:")
@@ -324,7 +228,6 @@ async def recovery_set_password(message: Message, state: FSMContext):
 
 @router.message(StateFilter(RecoveryForm.confirm_new_password), F.text)
 async def recovery_confirm_password(message: Message, state: FSMContext):
-    "Подтверждение нового пароля и сохранение в БД"
     data = await state.get_data()
     new_password = data["new_password"]
     confirm_password = message.text.strip()
@@ -334,7 +237,7 @@ async def recovery_confirm_password(message: Message, state: FSMContext):
     phone = data["phone"]
     conn, cur = db.init_users()
     try:
-        cur.execute("UPDATE users SET password = ?, verification_code = NULL WHERE phone = ?", (new_password, phone))
+        cur.execute("UPDATE users SET password = ? WHERE phone = ?", (new_password, phone))
         conn.commit()
     finally:
         conn.close()
@@ -375,7 +278,6 @@ async def cancel_fsm(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Регистрация/вход отменён.", reply_markup=kb.start_kb)
     await callback.answer()
 
-
 # КАТАЛОГ
 
 @router.message(F.text == "Каталог")
@@ -401,7 +303,6 @@ async def show_category(callback: CallbackQuery):
         await callback.message.send_photo(photo=photo_url, caption=f"{description}\nЦена: {price} руб.", reply_markup=markup)
     await callback.answer()
 
-
 # ДОБАВЛЕНИЕ ТОВАРОВ В КОРЗИНУ 
 
 @router.callback_query(F.data.startswith("add_"))
@@ -418,7 +319,6 @@ async def add_to_cart(callback: CallbackQuery):
     db.update_user_basket(callback.from_user.id, basket)
     await callback.answer(f"Товар {product_id} добавлен в корзину.")
 
-
 # КОРЗИНА 
 
 @router.message(F.text == "Корзина")
@@ -433,7 +333,6 @@ async def view_cart(message: Message):
         photo_url, description, price = cur.fetchone()
         await message.send_photo(photo=photo_url, caption=f"{description}\nЦена: {price} руб.")
     conn.close()
-
 
 # АДМИНКА 
 

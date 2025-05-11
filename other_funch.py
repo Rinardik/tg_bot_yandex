@@ -1,10 +1,38 @@
 import db
 import time
 from datetime import timedelta
-import random
+import re
 
-async def generate_code():
-    return str(random.randint(100000, 999999))
+def is_password_strong(password: str, name: str = "", phone: str = "") -> tuple[bool, str]:
+    if len(password) < 6:
+        return False, "Пароль слишком короткий. Минимум 6 символов."
+    if not re.search(r"\d", password):
+        return False, "Пароль должен содержать хотя бы одну цифру."
+    if not re.search(r"[A-ZА-Я]", password):
+        return False, "Пароль должен содержать хотя бы одну заглавную букву."
+    if not re.search(r"[a-zа-я]", password):
+        return False, "Пароль должен содержать хотя бы одну строчную букву."
+    if ' ' in password:
+        return False, "Пароль не должен содержать пробелов."
+    if name and name.lower() in password.lower():
+        return False, "Пароль не должен содержать ваше имя."
+    if phone:
+        digits = ''.join(filter(str.isdigit, phone))
+        if len(digits) >= 4 and any(part in password for part in [digits[-4:], digits[:4]]):
+            return False, "Пароль не должен содержать часть вашего номера телефона."
+    return True, "Пароль соответствует требованиям безопасности."
+
+async def format_phone(phone: str) -> str:
+    digits = ''.join(filter(str.isdigit, phone))
+    if len(digits) == 11:
+        if digits.startswith('8'):
+            return '+7' + digits[1:]
+        elif digits.startswith('7'):
+            return '+' + digits
+    elif len(digits) == 10 and phone.startswith('9'):
+        return '+7' + digits
+    return '+' + digits
+
 
 async def user_exists(user_id: int) -> bool:
     conn, cur = db.init_users()
