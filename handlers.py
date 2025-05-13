@@ -1,6 +1,6 @@
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.fsm.state import default_state
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Contact
 from aiogram.filters import CommandStart, Command, StateFilter
 from other_funch import was_inactive_for_24_hours
@@ -8,59 +8,10 @@ import db
 import keyboard as kb
 from other_funch import user_exists, is_correct_mobile_phone_number_ru, format_phone, is_password_strong
 from const import MANAGER_ID
+from states import RegistrationForm, LoginStates, RecoveryForm, ProductForm, CategoryForm, SubcategoryForm, RedactForm, DeleteForm
+import json
 
 router = Router()
-
-# состояния для регистрации
-class RegistrationForm(StatesGroup):
-    name = State()
-    phone = State()
-    password = State()
-    password_confirm = State()
-
-
-# состояния для входа
-class LoginStates(StatesGroup):
-    phone = State()
-    password = State()
-
-
-class RecoveryForm(StatesGroup):
-    phone = State()
-    code = State()
-    new_password = State()
-    confirm_new_password = State()
-
-
-class ProductForm(StatesGroup):
-    name = State()             # Название товара
-    description = State()      # Описание
-    price = State()            # Цена
-    category = State()         # Категория
-    subcategory = State()      # Подкатегория
-    photo = State()            # Фото
-
-
-class CategoryForm(StatesGroup):
-    name = State()  # Ввод названия категории
-
-
-class SubcategoryForm(StatesGroup):
-    category_name = State()        # Ввод названия категории
-    subcategory_name = State()     # Ввод названия подкатегории
-
-
-class RedactForm(StatesGroup):
-    product_id = State()
-    name = State()
-    description = State()
-    price = State()
-    category = State()
-    subcategory = State()
-    photo = State()
-
-class DeleteForm(StatesGroup):
-    id = State()
 
 # /START
 
@@ -218,6 +169,7 @@ async def process_name(message: Message, state: FSMContext):
     await message.answer("Нажмите на кнопку ниже, чтобы отправить ваш номер телефона:", reply_markup=kb.zam_parol)
     await state.set_state(RegistrationForm.phone)
 
+
 @router.message(StateFilter(RegistrationForm.phone), F.contact)
 async def process_phone(message: Message, state: FSMContext):
     contact: Contact = message.contact
@@ -236,8 +188,7 @@ async def process_phone(message: Message, state: FSMContext):
         await message.answer(
             "❌ Пользователь с этим телефоном уже зарегистрирован.\n"
             "Если вы забыли пароль — нажмите на кнопку ниже.",
-            reply_markup=kb.zam_parol
-        )
+            reply_markup=kb.zam_parol)
         await state.clear()
         return
     await state.update_data(phone=phone)
@@ -316,59 +267,266 @@ async def cancel_fsm(callback: CallbackQuery, state: FSMContext):
 
 # КАТАЛОГ
 
-# @router.message(F.text == "Каталог")
-# async def show_catalog(message: Message):
-#     registered = await user_exists(message.from_user.id)
-#     if not registered:
-#         await message.answer("Вы должны зарегистрироваться, чтобы получить доступ к каталогу.")
-#         return
-#     await message.answer("Выберите категорию:", reply_markup=kb.catalog_kb)
+@router.callback_query(F.data == "catalog")
+async def show_catalog(callback: CallbackQuery):
+    registered = await user_exists(callback.from_user.id)
+    if not registered:
+        await callback.message.answer("Вы должны зарегистрироваться, чтобы получить доступ к каталогу.")
+        await callback.answer()
+        return
+    categories = db.get_all_categories()
+    keyboard = kb.get_catalog_keyboard(categories)
+    if not keyboard:
+        await callback.message.answer("❌ Категории пока отсутствуют.")
+        return
+    await callback.message.answer("🛍 Выберите категорию:", reply_markup=keyboard)
+    await callback.answer()
 
 
-# @router.callback_query(F.data.startswith("cat_"))
-# async def show_category(callback: CallbackQuery):
-#     category = callback.data.split("_")[1]
-#     products = db.get_products_by_category(category)
-#     if not products:
-#         await callback.message.answer(f"Категория '{category}' пуста.")
-#         return
-#     for product_id, photo_url, description, price in products:
-#         markup = InlineKeyboardMarkup(inline_keyboard=[
-#             [InlineKeyboardButton(text=f"Добавить в корзину {product_id}", callback_data=f"add_{product_id}")]
-#         ])
-#         await callback.message.send_photo(photo=photo_url, caption=f"{description}\nЦена: {price} руб.", reply_markup=markup)
-#     await callback.answer()
+@router.callback_query(F.data.startswith("category_"))
+async def show_subcategories(callback: CallbackQuery):
+    try:
+        category_id = int(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback.message.answer("❌ Неверный формат данных.")
+        await callback.answer()
+        return
+    subcategories = db.get_subcategories_by_category(category_id)
+    if not subcategories:
+        products = db.get_products_by_category(category_id)
+        if not products:
+            await callback.message.answer("❌ Товаров в этой категории пока нет.")
+            return
+        keyboard = kb.get_products_keyboard(products)
+        await callback.message.answer("🛍 Товары категории:", reply_markup=keyboard)
+        return
+    keyboard = kb.get_subcategories_keyboard(subcategories)
+    await callback.message.answer("🧩 Выберите подкатегорию:", reply_markup=keyboard)
+    await callback.answer()
 
-# ДОБАВЛЕНИЕ ТОВАРОВ В КОРЗИНУ 
 
-# @router.callback_query(F.data.startswith("add_"))
-# async def add_to_cart(callback: CallbackQuery):
-#     product_id = int(callback.data.split("_")[1])
-#     conn, cur = db.init_products()
-#     cur.execute("SELECT description, price FROM products WHERE id=?", (product_id,))
-#     product = cur.fetchone()
-#     if not product:
-#         await callback.answer("Товар не найден.")
-#         return
-#     basket = db.get_user_basket(callback.from_user.id)
-#     basket.append(product_id)
-#     db.update_user_basket(callback.from_user.id, basket)
-#     await callback.answer(f"Товар {product_id} добавлен в корзину.")
+@router.callback_query(F.data.startswith("subcategory_"))
+async def show_products_by_subcategory(callback: CallbackQuery):
+    try:
+        subcategory_id = int(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback.message.answer("❌ Неверный формат данных.")
+        await callback.answer()
+        return
+    products = db.get_products_by_subcategory(subcategory_id)
+    if not products:
+        await callback.message.answer("❌ В этой подкатегории пока нет товаров.")
+        return
+    keyboard = kb.get_products_keyboard(products)
+    await callback.message.answer("🛍 Товары подкатегории:", reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("product_"))
+async def view_product(callback: CallbackQuery):
+    try:
+        product_id = int(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback.message.answer("❌ Неверный ID товара")
+        await callback.answer()
+        return
+    product = db.get_product_by_id(product_id)
+    if not product:
+        await callback.message.answer("❌ Товар не найден.")
+        return
+    pid, name, photo, description, price, category_id, subcategory_id, available = product
+    caption = (
+        f"<b>{name}</b>\n\n"
+        f"{description}\n\n"
+        f"💰 Цена: {price} руб.\n"
+        f"📦 Статус: {'✅ В наличии' if available else '❌ Нет в наличии'}\n"
+        f"ID: {pid}")
+    if photo and isinstance(photo, str):
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=kb.get_product_detail_keyboard(pid))
+    else:
+        await callback.message.answer(
+            caption,
+            parse_mode="HTML",
+            reply_markup=kb.get_product_detail_keyboard(pid))
+    await callback.answer()
 
 # КОРЗИНА 
 
-# @router.message(F.text == "Корзина")
-# async def view_cart(message: Message):
-#     basket = db.get_user_basket(message.from_user.id)
-#     if not basket:
-#         await message.answer("Корзина пуста.")
-#         return
-#     conn, cur = db.init_products()
-#     for product_id in basket:
-#         cur.execute("SELECT photo, description, price FROM products WHERE id=?", (product_id,))
-#         photo_url, description, price = cur.fetchone()
-#         await message.send_photo(photo=photo_url, caption=f"{description}\nЦена: {price} руб.")
-#     conn.close()
+async def show_basket_after_edit(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    if not basket:
+        await callback.message.answer("🛒 Ваша корзина пуста.")
+        return
+    total_price = 0
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    for product_id_str, quantity in basket.items():
+        product_id = int(product_id_str)
+        product = db.get_product_by_id(product_id)
+        if not product:
+            continue
+        pid, name, photo, description, price, category_id, subcategory_id, available = product
+        item_total = price * quantity
+        total_price += item_total
+        caption = (
+            f"<b>{name}</b>\n\n"
+            f"{description}\n\n"
+            f"📦 Статус: {'✅ В наличии' if available else '❌ Нет в наличии'}\n"
+            f"💰 Цена: {price} руб.\n"
+            f"🔢 Количество: {quantity}\n"
+            f"🧮 Итого: {item_total} руб."
+        )
+        if photo and isinstance(photo, str):
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb.get_basket_item_keyboard(pid))
+        else:
+            await callback.message.answer(
+                caption,
+                parse_mode="HTML",
+                reply_markup=kb.get_basket_item_keyboard(pid))
+    await callback.message.answer(f"🧮 Общая сумма: <b>{total_price} руб.</b>", parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("add_"))
+async def add_to_cart(callback: CallbackQuery):
+    if callback.data.startswith("add_category_") or callback.data.startswith("add_subcategory_"):
+        await callback.answer("Это не товар для корзины.")
+        return
+    parts = callback.data.split("_")
+    if len(parts) < 2:
+        await callback.message.answer("❌ Неверный формат данных.")
+        return
+    if not parts[1].isdigit():
+        await callback.message.answer(f"❌ ID товара должен быть числом. Получено: {parts[1]}")
+        return
+    product_id = int(parts[1])
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    key = str(product_id)
+    basket[key] = basket.get(key, 0) + 1
+    db.update_user_basket(user_id, basket)
+    await callback.message.answer(f"✅ Товар #{product_id} добавлен в корзину.")
+    await show_basket_after_edit(callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "view_basket")
+async def view_basket(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    if not basket:
+        await callback.message.answer("🛒 Ваша корзина пуста.")
+        return
+    basket_ids = list(map(int, basket.keys()))
+    if not basket_ids:
+        await callback.message.answer("❌ В корзине нет товаров.")
+        return
+    products = db.get_products_by_ids(basket_ids)
+    if not products:
+        await callback.message.answer("❌ Товаров в базе данных не найдено.")
+        return
+    total_price = 0
+    for p in products:
+        pid, name, photo, description, price = p
+        quantity = basket.get(str(pid), 1)
+        item_total = price * quantity
+        total_price += item_total
+        caption = (
+            f"<b>{name}</b>\n\n"
+            f"{description}\n\n"
+            f"💰 Цена: {price} руб.\n"
+            f"🔢 Количество: {quantity}\n"
+            f"🧮 Итого: {item_total} руб.")
+        if photo and isinstance(photo, str):
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb.get_basket_item_keyboard(pid))
+        else:
+            await callback.message.answer(
+                caption,
+                parse_mode="HTML",
+                reply_markup=kb.get_basket_item_keyboard(pid))
+    await callback.message.answer(f"🧮 Общая сумма: <b>{total_price} руб.</b>", parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("remove_all_"))
+async def remove_all_from_cart(callback: CallbackQuery):
+    try:
+        product_id = int(callback.data.split("_")[2])
+    except (IndexError, ValueError):
+        await callback.answer("❌ Неверный формат данных.")
+        return
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    key = str(product_id)
+    if key in basket:
+        del basket[key]
+        db.update_user_basket(user_id, basket)
+        await callback.message.answer(f"🗑 Удалён товар #{product_id}")
+    await show_basket_after_edit(callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("remove_one_"))
+async def remove_one_from_cart(callback: CallbackQuery):
+    try:
+        product_id = int(callback.data.split("_")[2])
+    except (IndexError, ValueError):
+        await callback.answer("❌ Неверный формат данных.")
+        return
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    key = str(product_id)
+    if key in basket:
+        basket[key] -= 1
+        if basket[key] <= 0:
+            del basket[key]
+        db.update_user_basket(user_id, basket)
+        await callback.message.answer(f"🗑 Уменьшили количество товара #{product_id}")
+    await show_basket_after_edit(callback)
+    await callback.answer()
+    
+
+@router.callback_query(F.data == "view_basket")
+async def view_basket(callback: CallbackQuery):
+    await show_basket_after_edit(callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "checkout")
+async def checkout_handler(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    basket = db.get_user_basket(user_id)
+    if not basket:
+        await callback.message.answer("🛒 Ваша корзина пуста.")
+        return
+    product_ids = list(map(int, basket.keys()))
+    products = db.get_products_by_ids(product_ids)
+    if not products:
+        await callback.message.answer("❌ Товары не найдены в базе данных.")
+        return
+    total_price = sum(db.get_product_by_id(pid)[4] * qty for pid, qty in basket.items())
+    db.save_order(user_id, basket, total_price)
+    db.update_user_basket(user_id, {})
+    caption = f"✅ Заказ оформлен!\n\n🧮 Итого: {total_price} руб.\nСпасибо за покупку!"
+    await callback.message.answer(caption)
+    await notify_manager_about_order(
+        bot=callback.bot,
+        user_id=user_id,
+        basket=basket,
+        total_price=total_price
+    )
+    await callback.answer()
 
 # МЕНЕДЖЕР 
 
@@ -381,10 +539,11 @@ async def admin_panel(message: Message):
 
 # ДОБАВЛЕНИЕ ТОВАРА МЕНЕДЖЕРОМ
 
-@router.callback_query(F.data == "add_product")
+@router.callback_query(F.data == "admin_add_product")
 async def add_product_start(callback: CallbackQuery, state: FSMContext):
-    await callback.answer("Введите категорию товара:")
+    await callback.message.answer("Введите категорию товара:")
     await state.set_state(ProductForm.category)
+    await callback.answer()
 
 
 @router.message(ProductForm.category)
@@ -456,7 +615,7 @@ async def product_set_price(message: Message, state: FSMContext):
 
 # УДАЛЕНИЕ ТОВАРА МЕНЕДЖЕРОМ
 
-@router.callback_query(F.data == "delete_product")
+@router.callback_query(F.data == "admin_delete_product")
 async def delete_product_prompt(message: Message, state: FSMContext):
     await message.answer("Введите ID товара, который хотите удалить:")
     await message.answer("Для отмены нажмите /cancel")
@@ -477,7 +636,7 @@ async def delete_product_by_id(message: Message, state: FSMContext):
 
 # РЕДАКТИРОВАНИЕ ТОВАРА МЕНЕДЖЕРОМ
 
-@router.callback_query(F.data == "edit_product")
+@router.callback_query(F.data == "admin_edit_product")
 async def edit_product_prompt(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите ID товара для редактирования:")
     await state.set_state(RedactForm.product_id)
@@ -489,30 +648,28 @@ async def edit_product_get_id(message: Message, state: FSMContext):
     if not product:
         await message.answer(f"❌ Товар с ID {product_id} не найден.")
         return
-    pid, name, photo, description, price, category_id, subcategory_id = product
+    pid, name, photo, description, price, category_id, subcategory_id, available = product
     category_name = db.get_category_name_by_id(category_id) if category_id else "Не указана"
     subcategory_name = db.get_subcategory_name_by_id(subcategory_id) if subcategory_id else "Не указана"
     caption = (
         f"<b>Редактирование товара #{pid}</b>\n\n"
         f"Название: {name}\n"
         f"Описание: {description}\n"
+        f"📦 Статус: {'✅ В наличии' if available else '❌ Нет в наличии'}\n"
         f"Цена: {price} руб.\n"
         f"Категория: {category_name}\n"
-        f"Подкатегория: {subcategory_name}"
-    )
+        f"Подкатегория: {subcategory_name}")
     if photo and isinstance(photo, str):
         await message.answer_photo(
             photo=photo,
             caption=caption,
             reply_markup=kb.edit_product_keyboard(pid),
-            parse_mode="HTML"
-        )
+            parse_mode="HTML")
     else:
         await message.answer(
             caption + "\n\n📷 Фото: отсутствует",
             reply_markup=kb.edit_product_keyboard(pid),
-            parse_mode="HTML"
-        )
+            parse_mode="HTML")
     await state.update_data(product_id=pid)
     await state.set_state(RedactForm.product_id)
 
@@ -542,6 +699,9 @@ async def start_editing(callback: CallbackQuery, state: FSMContext):
     elif action == "photo":
         await callback.message.answer("Загрузите новое фото:")
         await state.set_state(RedactForm.photo)
+    elif action == "available":
+        await callback.message.answer("Введите 0, 1 если товар не в наличии, в наличии соответсвенно")
+        await state.set_state(RedactForm.available)
     else:
         await callback.answer("❌ Неизвестное действие")
         return
@@ -554,30 +714,28 @@ async def show_edit_menu(message: Message, state: FSMContext, product_id: int):
     if not product:
         await message.answer("❌ Товар не найден.")
         return
-    pid, name, photo, description, price, category_id, subcategory_id = product
+    pid, name, photo, description, price, category_id, subcategory_id, available = product
     category_name = db.get_category_name_by_id(category_id) if category_id else "Не указана"
     subcategory_name = db.get_subcategory_name_by_id(subcategory_id) if subcategory_id else "Не указана"
     caption = (
         f"<b>Редактирование товара #{pid}</b>\n\n"
         f"Название: {name}\n"
         f"Описание: {description}\n"
+        f"📦 Статус: {'✅ В наличии' if available else '❌ Нет в наличии'}\n"
         f"Цена: {price} руб.\n"
         f"Категория: {category_name}\n"
-        f"Подкатегория: {subcategory_name}"
-    )
+        f"Подкатегория: {subcategory_name}")
     if photo and isinstance(photo, str):
         await message.answer_photo(
             photo=photo,
             caption=caption,
             reply_markup=kb.edit_product_keyboard(pid),
-            parse_mode="HTML"
-        )
+            parse_mode="HTML")
     else:
         await message.answer(
             caption + "\n\n📷 Фото: отсутствует",
             reply_markup=kb.edit_product_keyboard(pid),
-            parse_mode="HTML"
-        )
+            parse_mode="HTML")
     await state.update_data(product_id=pid)
     await state.set_state(RedactForm.product_id)
 
@@ -650,8 +808,18 @@ async def edit_product_set_category(message: Message, state: FSMContext):
     await message.answer(f"✅ Категория товара #{product_id} изменена на '{new_category_name}'")
     await state.clear()
 
+@router.message(RedactForm.available)
+async def edit_product_set_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    product_id = data["product_id"]
+    new_name = message.text.strip()
+    db.update_product_available(product_id, new_name)
+    await message.answer(f"Cтатус товара изменен на {'В наличии' if message.text.strip() else 'Нет в наличии'}")
+    await show_edit_menu(message, state, product_id)
+    await state.set_state(RedactForm.product_id)
 
-@router.callback_query(F.data == "add_category")
+
+@router.callback_query(F.data == "admin_add_category")
 async def add_category_handler(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите название категории:")
     await state.set_state(CategoryForm.name)
@@ -669,7 +837,7 @@ async def save_new_category(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data == "add_subcategory")
+@router.callback_query(F.data == "admin_add_subcategory")
 async def add_subcategory_handler(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Введите название категории, к которой хотите добавить подкатегорию:")
     await state.set_state(SubcategoryForm.category_name)
@@ -684,11 +852,9 @@ async def get_category_for_subcategory(message: Message, state: FSMContext):
     category = cur.fetchone()
     conn.close()
     if not category:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Создать новую категорию", callback_data="add_category")],
-            [InlineKeyboardButton(text="🔄 Повторить ввод", callback_data="retry_add_subcategory")]
-        ])
-        await message.answer(f"❌ Категория '{category_name}' не найдена.", reply_markup=keyboard)
+        await message.answer(
+            f"❌ Категория '{category_name}' не найдена.",
+            reply_markup=kb.get_subcategories())        
         return
     await state.update_data(category_id=category[0])
     await message.answer("Введите название подкатегории:")
@@ -714,7 +880,7 @@ async def save_new_subcategory(message: Message, state: FSMContext):
 
 # ПРОСМОТР ТОВАРА МЕНЕДЖЕРОМ
 
-@router.callback_query(F.data == "list_products")
+@router.callback_query(F.data == "admin_list_products")
 async def list_products_handler(callback: CallbackQuery):
     products = db.get_all_products()
     if not products:
@@ -741,7 +907,7 @@ async def view_product_handler(callback: CallbackQuery):
         await callback.message.answer("❌ Товар не найден.")
         await callback.answer()
         return
-    pid, name, photo, description, price, category_id, subcategory_id = product
+    pid, name, photo, description, price, category_id, subcategory_id, available = product
     category_name = db.get_category_name_by_id(category_id) if category_id else None
     subcategory_name = db.get_subcategory_name_by_id(subcategory_id) if subcategory_id else None
     category_info = ""
@@ -749,19 +915,80 @@ async def view_product_handler(callback: CallbackQuery):
         category_info += f"\n🗂 Категория: {category_name}"
     if subcategory_name:
         category_info += f"\n🧩 Подкатегория: {subcategory_name}"
-    caption = f"<b>{name}</b>\n\n{description}\n\n💰 Цена: {price} руб.{category_info}\n\nID: {pid}"
+    caption = f"<b>{name}</b>\n\n{description}\n\n💰 Цена: {price} руб.{category_info}\n\n📦 Статус: {'✅ В наличии' if available else '❌ Нет в наличии'}\n\nID: {pid}"
     if photo and isinstance(photo, str):
         await callback.message.answer_photo(photo, caption=caption, parse_mode="HTML")
     else:
         await callback.message.answer(caption, parse_mode="HTML")   
     await callback.answer()
 
-# /CANCEL
 
-@router.message(Command("cancel"), ~StateFilter(default_state))
-async def cmd_cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Регистрация/вход отменён.", reply_markup=kb.start_kb)
+async def notify_manager_about_order(bot: Bot, user_id: int, basket: dict, total_price: int):
+    basket_text = "\n".join([
+        f"{db.get_product_by_id(int(pid))[1]} x {qty} шт. = {db.get_product_by_id(int(pid))[4] * qty} руб."
+        for pid, qty in basket.items()
+    ])
+    message_text = (
+        f"📦 Новый заказ от пользователя {user_id}\n\n"
+        f"Товары:\n{basket_text}\n\n"
+        f"🧮 Общая сумма: {total_price} руб."
+    )
+    for manager_id in MANAGER_ID:
+        try:
+            await bot.send_message(manager_id, message_text, reply_markup=kb.mened)
+        except Exception as e:
+            print(f"[notify_manager] Ошибка при отправке менеджеру {manager_id}: {e}")
+
+
+def format_basket(basket):
+    lines = []
+    for pid, quantity in basket.items():
+        product = db.get_product_by_id(int(pid))
+        if product:
+            _, name, _, _, price, *_ = product
+            lines.append(f"{name} x {quantity} шт. = {price * quantity} руб.")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "view_orders")
+async def view_orders(callback: CallbackQuery):
+    orders = db.get_new_orders()
+    if not orders:
+        await callback.message.answer("📋 Нет новых заказов.")
+        return
+    for order in orders:
+        order_id, user_id, basket_json, total_price, created_at = order
+        basket = json.loads(basket_json)
+        user_info = db.get_user_info(user_id)
+        if user_info:
+            name, phone = user_info
+            caption = (
+                f"📦 Заказ #{order_id}\n"
+                f"👤 Пользователь: {user_id} --- {name}\n"
+                f"📞 Телефон: {phone}\n")
+        caption += f"Дата: {created_at}\n\n"
+        caption += f"Товары:\n{format_basket(basket)}\n\n"
+        caption += f"🧮 Итого: {total_price} руб."
+        await callback.message.answer(caption, reply_markup=kb.get_order_actions(order_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_order_"))
+async def confirm_order(callback: CallbackQuery):
+    try:
+        order_id = int(callback.data.split("_")[2])
+    except (IndexError, ValueError):
+        await callback.message.answer("❌ Неверный формат данных.")
+        return
+    db.update_order_status(order_id, "confirmed")
+    order = db.get_order_by_id(order_id)
+    if not order:
+        await callback.message.answer("❌ Заказ не найден.")
+        return
+    _, user_id, _, _, _ = order
+    await callback.bot.send_message(user_id, f"✅ Ваш заказ #{order_id} подтверждён!")
+    await callback.message.edit_text(f"Заказ #{order_id} подтверждён.", reply_markup=None)
+    await callback.answer()
 
 # ОСТАЛЬНЫЕ ЗАПРОСЫ
 
@@ -773,5 +1000,4 @@ async def handle_unknown_message(message: Message):
         "/start — начать\n"
         "/profile — посмотреть профиль\n"
         "/help — помощь",
-        reply_markup=kb.start_kb
-    )
+        reply_markup=kb.start_kb)
