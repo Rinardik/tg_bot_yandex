@@ -85,6 +85,40 @@ async def add_to_cart(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"[add_to_cart] Ошибка при добавлении товара: {e}", exc_info=True)
 
+
+@router.callback_query(F.data.startswith("remove_one_"))
+async def remove_one_from_cart(callback: CallbackQuery):
+    """
+    Обработчик кнопки 'Убрать один'.
+    Уменьшает количество товара в корзине на 1, а если количество становится 0 - удаляет товар.
+    """
+    try:
+        parts = callback.data.split("_")
+        if len(parts) < 3 or not parts[2].isdigit():
+            await callback.message.answer("❌ Неверный формат данных.")
+            return
+        product_id = int(parts[2])
+        user_id = callback.from_user.id
+        basket = db.get_user_basket(user_id)
+        key = str(product_id)
+        if key in basket:
+            if basket[key] > 1:
+                basket[key] -= 1
+                message_text = f"➖ Товар #{product_id} уменьшен до {basket[key]} шт."
+            else:
+                del basket[key]
+                message_text = f"🗑 Товар #{product_id} удалён из корзины." 
+            db.update_user_basket(user_id, basket)
+            await callback.message.answer(message_text)
+            await show_basket_after_edit(callback)
+        else:
+            await callback.answer("❌ Этот товар отсутствует в корзине.")
+            
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"[remove_one_from_cart] Ошибка при уменьшении товара: {e}", exc_info=True)
+        await callback.answer("❌ Произошла ошибка при обработке запроса.")
+
     
 @router.callback_query(F.data == "view_basket")
 async def view_basket(callback: CallbackQuery):
